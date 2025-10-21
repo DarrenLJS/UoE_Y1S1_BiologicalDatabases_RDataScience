@@ -1,0 +1,181 @@
+---
+title: "RDS_T5_heatmaps"
+output:
+  html_document:
+    theme: readable
+---
+
+<style>
+body { font-size: 15px; }
+pre, code { font-size: 11px; }
+</style>
+
+### Choosing Data
+
+```{r}
+packageDescription('airway')
+```
+
+Load the data into the environment using data:
+```{r}
+data(airway, package="airway")
+class(airway)
+```
+
+airway Obj is a *SummarizedExperiment* Obj
+To work with this sort of data structure, we need *SummarizedExperiment* package
+*SummarizedExperiment* objects can contain multiple ‘assays’ for the same set of genes/transcripts etc. These are accessible with the assays() method. Here we’ve only got the one matrix to deal with. Let’s extract it from the object for ease of use
+```{r}
+library(SummarizedExperiment)
+assays(airway)
+expression <- assays(airway)[[1]]
+head(expression)
+nrow(expression) # Number of rows
+```
+
+If we try to make a heatmap from this many rows it will be too large to display, so we’re going to need to subset this matrix. The most interesting things are likely to be those that vary the most across samples. We can calculate the variance for each row in the matrix, and select the top 50 most variable rows.
+```{r}
+variances <- apply(expression, 1, var)
+expression <- expression[order(variances, decreasing=TRUE)[1:50],] 
+head(expression)
+```
+
+
+### Annotation
+
+For display purposes the Ensembl genes here aren’t all that useful. Where gene symbols are available, let’s add them onto the labels. We’ll use the *org.Hs.eg annotation* package
+```{r}
+library(org.Hs.eg.db) 
+annotation <- merge(toTable(org.Hs.egSYMBOL), toTable(org.Hs.egENSEMBL2EG)) 
+gene_names <- annotation$symbol[match(rownames(expression), annotation$ensembl_id)] 
+rownames(expression)[! is.na(gene_names)] <- paste(gene_names[!is.na(gene_names)], rownames(expression)[! is.na(gene_names)], sep = ' / ')
+```
+
+
+We’ll be needing some information about what these samples are. We can extract that from our *SummarizedExperiment* with *colData()*. Note that what *colData()* returns is not a regular *data.frame*, hence the use of *data.frame()* to make one.
+```{r}
+experiment <- data.frame(colData(airway)) 
+head(experiment)
+```
+
+
+## Heatmaps
+
+Going to use *pheatmap()*, so need to load the package
+```{r}
+library(pheatmap)
+pheatmap(expression)
+```
+
+You may find the fonts are difficult to read on the rows so you can adjust this using
+```{r}
+pheatmap(
+  expression,
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+Hmm, those colours aren’t all that useful. We’re probably more interested in doublings of expression than more subtle changes, so let’s flip our values to the log2 scale and try again. We’ll need an offset to prevent nasty NA errors in R when log2 is applied to 0 values.
+```{r}
+expression <- log2(expression + 1)
+pheatmap(
+  expression,
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+We’re getting there, but this is still not all that useful. See how the colour range varies between rows? That’s because the different rows vary within different limits, and the colour scale goes from the lowest to highest value anywhere in the matrix. What we really want to highlight is changes within each row.
+```{r}
+pheatmap(
+  expression,
+  scale='row',
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+Now we can see the patterns by row. But we don’t know if those patterns have anything to do with the experimental variables. We’ve got our experiment object- can we use that?
+```{r}
+pheatmap(
+  expression,
+  scale='row',
+  annotation_col=experiment,
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+Not many of the group annotations are very useful. SampleName, Experiment etc don’t really represent groups.
+cell line (cell) and dexamethasone treatment (dex) are probably the only useful variables to examine for groups.
+```{r}
+pheatmap(
+  expression,
+  scale='row',
+  annotation_col=experiment[, c('cell', 'dex')],
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+Much better. Plus, the clustering pheatmap() does by default shows us that things cluster mainly by the dex variable.
+But the sample ordering imposed makes interpretation of cell between dex groups a bit difficult.
+Look at the documentation again, and you’ll see we can disable that.
+```{r}
+pheatmap(
+  expression,
+  scale='row',
+  annotation_col=experiment[, c('cell', 'dex')],
+  cluster_col=FALSE,
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+That’s not an improvement - we need to fix the ordering in our experiment and adjust the expression matrix to match.
+This sorts by dex, and then by cell.
+```{r}
+experiment <- experiment[with(experiment, order(dex, cell)), ] 
+expression <- expression[,rownames(experiment)]
+
+pheatmap(
+  expression,
+  scale='row',
+  annotation_col=experiment[, c('cell', 'dex')],
+  cluster_col=FALSE,
+  fontsize_row = 6,
+  fontsize_col=12
+)
+```
+
+Those colours aren’t very helpful are they? The two of the cell groups are not very distinguishable. Fortunately we can change the colours.
+```{r}
+pheatmap( 
+  expression, 
+  scale='row', 
+  annotation_col=experiment[,c('cell', 'dex')], 
+  cluster_col=FALSE, 
+  annotation_colors = list('cell' = c('N052611' = 'red', 'N061011' = 'blue', 'N080611' = 'green', 'N61311' = 'yellow')), 
+  fontsize_row = 6, 
+  fontsize_col = 12 
+)
+```
+
+### Tidying Up
+
+Add a title
+Remove the legend (the values associated with colours are meaningless with row scaling)
+```{r}
+pheatmap( 
+  expression, 
+  scale='row', 
+  annotation_col=experiment[,c('cell', 'dex')], 
+  cluster_col=FALSE, 
+  annotation_colors = list('cell' = c('N052611' = 'red', 'N061011' = 'blue', 'N080611' = 'green', 'N61311' = 'yellow')), 
+  main = 'My awesome plot', 
+  legend = FALSE, 
+  fontsize_row = 6, 
+  fontsize_col = 12 
+)
+```
